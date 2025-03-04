@@ -12,7 +12,7 @@ pub mod salary_platform {
 
     use super::*;
 
-    pub fn deposit(ctx:Context<Deposit>,mount:u64,unlock_time:u64)->Result<()> {
+    pub fn deposit(ctx:Context<Deposit>,mount:u64,unlock_time:i64)->Result<()> {
         let escrow_account = &mut ctx.accounts.escrow_account;
         escrow_account.from = ctx.accounts.sender.key();
         escrow_account.to = ctx.accounts.receiver.key();
@@ -30,13 +30,30 @@ pub mod salary_platform {
         transfer(CpiContext::new(cpi_program, cpi_accounts),mount)?;
         Ok(())
     }
-}
 
+    pub fn withdraw(ctx:Context<Withdraw>)->Result<()> {
+        let escrow_account = &mut ctx.accounts.escrow_account;
+        let current_time = Clock::get()?.unix_timestamp;
+        require!(escrow_account.unlock_time > current_time,EscrowError::UnlockTimeNotReached);
+        let amount = escrow_account.mount;
+        let authority = escrow_account.to_account_info();
+        
+        let cpi_accounts = Transfer{
+            from: ctx.accounts.escrow_token_account.to_account_info(),
+            to: ctx.accounts.receiver_token_account.to_account_info(),
+            authority,
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        transfer(CpiContext::new(cpi_program, cpi_accounts),amount)?;
+        escrow_account.is_extract = true;
+        Ok(())
+    }
+}
 #[account]
 pub struct EscrowAccount {
     pub from:Pubkey,
     pub to:Pubkey,
-    pub unlock_time:u64,
+    pub unlock_time:i64,
     pub mount:u64,
     pub is_extract:bool,
     pub lock:bool
@@ -82,4 +99,32 @@ pub struct Deposit<'info>{
 
     pub system_program:Program<'info,System>
 
+}
+
+#[derive(Accounts)]
+pub struct Withdraw<'info>{
+    #[account(mut)]
+    pub receiver: Signer<'info>,
+
+    #[account(mut)]
+    pub escrow_account: Account<'info,EscrowAccount>,
+
+    #[account(
+        mut,
+        seeds = [b"escrow", escrow_account.key().as_ref()],
+        bump
+    )]
+    pub escrow_token_account: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub receiver_token_account: Account<'info,TokenAccount>,
+
+    pub token_program: Program<'info,Token>,
+}
+
+
+#[error_code]
+pub enum EscrowError {
+    #[msg("Unlock time not reached.")]
+    UnlockTimeNotReached,
 }
