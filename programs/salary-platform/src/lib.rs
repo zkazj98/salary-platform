@@ -1,16 +1,35 @@
 use std::str::FromStr;
 
 use anchor_lang::prelude::*;
-use anchor_spl::{token::{Mint, Token}, token::TokenAccount};
+use anchor_spl::{token::{Mint, Token,transfer}, token::TokenAccount};
 
 declare_id!("3efaHuNJ3Aff6MbQ2MgN3BHz1r8kSsWKoSieDL9svbBX");
 
 const USDT_MINT_ADDRESS: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 #[program]
 pub mod salary_platform {
+    use anchor_spl::token::Transfer;
+
     use super::*;
 
-    
+    pub fn deposit(ctx:Context<Deposit>,mount:u64,unlock_time:u64)->Result<()> {
+        let escrow_account = &mut ctx.accounts.escrow_account;
+        escrow_account.from = ctx.accounts.sender.key();
+        escrow_account.to = ctx.accounts.receiver.key();
+        escrow_account.unlock_time = unlock_time;
+        escrow_account.mount = mount;
+        escrow_account.is_extract = false;
+        escrow_account.lock = false;
+
+        let cpi_accounts = Transfer{
+            from:ctx.accounts.send_token_account.to_account_info(),
+            to:ctx.accounts.escrow_token_account.to_account_info(),
+            authority:ctx.accounts.sender.to_account_info(),
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        transfer(CpiContext::new(cpi_program, cpi_accounts),mount)?;
+        Ok(())
+    }
 }
 
 #[account]
@@ -29,6 +48,9 @@ pub struct Deposit<'info>{
 
     #[account(mut)]
     pub sender:Signer<'info>,
+
+    #[account(mut)]
+    pub receiver: Account<'info,TokenAccount>,
 
     #[account(mut,constraint=send_token_account.mint == usdc_mint.key())]
     pub send_token_account:Account<'info,TokenAccount>,
