@@ -10,6 +10,7 @@ const USDT_MINT_ADDRESS: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 pub mod salary_platform {
     use super::*;
 
+    
 }
 
 #[account]
