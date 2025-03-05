@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use anchor_lang::prelude::*;
-use anchor_spl::{token::{Mint, Token,transfer}, token::TokenAccount};
+use anchor_spl::{token::{Mint, Token,transfer,}, token::TokenAccount};
 
 declare_id!("3efaHuNJ3Aff6MbQ2MgN3BHz1r8kSsWKoSieDL9svbBX");
 
@@ -33,10 +33,10 @@ pub mod salary_platform {
 
     pub fn withdraw(ctx:Context<Withdraw>)->Result<()> {
         let escrow_account = &mut ctx.accounts.escrow_account;
+        let authority = escrow_account.to_account_info();
         let current_time = Clock::get()?.unix_timestamp;
         require!(escrow_account.unlock_time > current_time,EscrowError::UnlockTimeNotReached);
         let amount = escrow_account.mount;
-        let authority = escrow_account.to_account_info();
         
         let cpi_accounts = Transfer{
             from: ctx.accounts.escrow_token_account.to_account_info(),
@@ -66,8 +66,7 @@ pub struct Deposit<'info>{
     #[account(mut)]
     pub sender:Signer<'info>,
 
-    #[account(mut)]
-    pub receiver: Account<'info,TokenAccount>,
+    pub receiver: AccountInfo<'info>,
 
     #[account(mut,constraint=send_token_account.mint == usdc_mint.key())]
     pub send_token_account:Account<'info,TokenAccount>,
@@ -76,6 +75,8 @@ pub struct Deposit<'info>{
         init,
         payer=sender,
         space=8+32+32+8+8+1+1,
+        seeds=[b"escrow",receiver.key().as_ref()],
+        bump,
         constraint=mount>0
     )]
     pub escrow_account:Account<'info,EscrowAccount>,
@@ -106,7 +107,12 @@ pub struct Withdraw<'info>{
     #[account(mut)]
     pub receiver: Signer<'info>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"escrow", receiver.key().as_ref()],
+        bump,
+        close = receiver
+    )]
     pub escrow_account: Account<'info,EscrowAccount>,
 
     #[account(
@@ -127,4 +133,10 @@ pub struct Withdraw<'info>{
 pub enum EscrowError {
     #[msg("Unlock time not reached.")]
     UnlockTimeNotReached,
+
+    #[msg("Invalid mint")]
+    InvalidMint,
+
+    #[msg("Invalid owner")]
+    InvalidOwner,
 }
