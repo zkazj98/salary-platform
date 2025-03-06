@@ -1,18 +1,18 @@
 use std::str::FromStr;
 
 use anchor_lang::prelude::*;
-use anchor_spl::{token::{Mint, Token,transfer,}, token::TokenAccount};
+use anchor_spl::{token::{Mint, Token,CloseAccount,transfer}, token::TokenAccount};
 
 declare_id!("3efaHuNJ3Aff6MbQ2MgN3BHz1r8kSsWKoSieDL9svbBX");
 
 const USDT_MINT_ADDRESS: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 #[program]
 pub mod salary_platform {
-    use anchor_spl::token::Transfer;
+    use anchor_spl::token::{self, Transfer};
 
     use super::*;
 
-    pub fn deposit(ctx:Context<Deposit>,mount:u64,unlock_time:i64)->Result<()> {
+    pub fn deposit(ctx:Context<Deposit>,mount:u64,unlock_time:i64,_secret_key:String)->Result<()> {
         let escrow_account = &mut ctx.accounts.escrow_account;
         escrow_account.from = ctx.accounts.sender.key();
         escrow_account.to = ctx.accounts.receiver.key();
@@ -31,9 +31,10 @@ pub mod salary_platform {
         Ok(())
     }
 
-    pub fn withdraw(ctx:Context<Withdraw>)->Result<()> {
+    pub fn withdraw(ctx:Context<Withdraw>,_secret_key:String)->Result<()> {
         let escrow_account = &mut ctx.accounts.escrow_account;
         let authority = escrow_account.to_account_info();
+        let close_authority = escrow_account.to_account_info();
         let current_time = Clock::get()?.unix_timestamp;
         require!(escrow_account.unlock_time > current_time,EscrowError::UnlockTimeNotReached);
         let amount = escrow_account.mount;
@@ -45,6 +46,16 @@ pub mod salary_platform {
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         transfer(CpiContext::new(cpi_program, cpi_accounts),amount)?;
+        
+        let close_cpi_accounts = CloseAccount{
+            account:ctx.accounts.receiver_token_account.to_account_info(),
+            destination:ctx.accounts.receiver.to_account_info(),
+            authority:close_authority,
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new(cpi_program, close_cpi_accounts);
+        token::close_account(cpi_ctx)?;
+
         escrow_account.is_extract = true;
         Ok(())
     }
@@ -60,7 +71,7 @@ pub struct EscrowAccount {
 }
 
 #[derive(Accounts)]
-#[instruction(mount:u64,unlock_time:u64)]
+#[instruction(mount:u64,unlock_time:u64,secret_key:String)]
 pub struct Deposit<'info>{
 
     #[account(mut)]
@@ -84,7 +95,7 @@ pub struct Deposit<'info>{
     #[account(
         init,
         payer=sender,
-        seeds=[b"escrow",escrow_account.key().as_ref()],
+        seeds=[b"escrow",secret_key.as_bytes(),escrow_account.key().as_ref()],
         bump,
         token::mint=usdc_mint,
         token::authority=escrow_account
@@ -103,13 +114,14 @@ pub struct Deposit<'info>{
 }
 
 #[derive(Accounts)]
+#[instruction(secret_key:String)]
 pub struct Withdraw<'info>{
     #[account(mut)]
     pub receiver: Signer<'info>,
 
     #[account(
         mut,
-        seeds = [b"escrow", receiver.key().as_ref()],
+        seeds = [b"escrow",secret_key.as_bytes(), receiver.key().as_ref()],
         bump,
         close = receiver
     )]
@@ -117,7 +129,7 @@ pub struct Withdraw<'info>{
 
     #[account(
         mut,
-        seeds = [b"escrow", escrow_account.key().as_ref()],
+        seeds = [b"escrow",secret_key.as_bytes(), escrow_account.key().as_ref()],
         bump
     )]
     pub escrow_token_account: Account<'info, TokenAccount>,
