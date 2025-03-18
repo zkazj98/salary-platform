@@ -12,7 +12,7 @@ pub mod salary_platform {
 
     use super::*;
 
-    pub fn deposit(ctx:Context<Deposit>,mount:u64,unlock_time:i64,_secret_key:String)->Result<()> {
+    pub fn deposit(ctx:Context<Deposit>,mount:u64,unlock_time:i64,secret_key:String)->Result<()> {
         let escrow_account = &mut ctx.accounts.escrow_account;
         escrow_account.from = ctx.accounts.sender.key();
         escrow_account.to = ctx.accounts.receiver.key();
@@ -28,6 +28,13 @@ pub mod salary_platform {
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         transfer(CpiContext::new(cpi_program, cpi_accounts),mount)?;
+        emit!(DepositEvent{
+            sender:ctx.accounts.sender.key(),
+            amount:mount,
+            timestamp:unlock_time,
+            secret_key:secret_key,
+            receiver:ctx.accounts.receiver.key()
+        });
         Ok(())
     }
 
@@ -123,6 +130,7 @@ pub struct Withdraw<'info>{
         mut,
         seeds = [b"escrow",secret_key.as_bytes(), receiver.key().as_ref()],
         bump,
+        constraint=escrow_account.to == receiver.key(),
         close = receiver
     )]
     pub escrow_account: Account<'info,EscrowAccount>,
@@ -140,6 +148,14 @@ pub struct Withdraw<'info>{
     pub token_program: Program<'info,Token>,
 }
 
+#[event]
+pub struct DepositEvent {
+    pub sender: Pubkey,
+    pub amount: u64,
+    pub timestamp: i64,
+    pub secret_key: String,
+    pub receiver:Pubkey
+}
 
 #[error_code]
 pub enum EscrowError {
@@ -152,3 +168,4 @@ pub enum EscrowError {
     #[msg("Invalid owner")]
     InvalidOwner,
 }
+
