@@ -27,6 +27,7 @@ pub mod salary_platform {
             authority:ctx.accounts.sender.to_account_info(),
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
+
         transfer(CpiContext::new(cpi_program, cpi_accounts),mount)?;
         emit!(DepositEvent{
             sender:ctx.accounts.sender.key(),
@@ -43,7 +44,8 @@ pub mod salary_platform {
         let authority = escrow_account.to_account_info();
         let close_authority = escrow_account.to_account_info();
         let current_time = Clock::get()?.unix_timestamp;
-        require!(escrow_account.unlock_time > current_time,EscrowError::UnlockTimeNotReached);
+        require!(escrow_account.lock,EscrowError::LockToken);
+        require!(escrow_account.unlock_time <= current_time,EscrowError::UnlockTimeNotReached);
         let amount = escrow_account.mount;
         
         let cpi_accounts = Transfer{
@@ -54,16 +56,46 @@ pub mod salary_platform {
         let cpi_program = ctx.accounts.token_program.to_account_info();
         transfer(CpiContext::new(cpi_program, cpi_accounts),amount)?;
         
+        // let close_cpi_accounts = CloseAccount{
+        //     account:ctx.accounts.receiver_token_account.to_account_info(),
+        //     destination:ctx.accounts.receiver.to_account_info(),
+        //     authority:close_authority,
+        // };
+
         let close_cpi_accounts = CloseAccount{
-            account:ctx.accounts.receiver_token_account.to_account_info(),
-            destination:ctx.accounts.receiver.to_account_info(),
-            authority:close_authority,
+            account: ctx.accounts.escrow_token_account.to_account_info(),
+            destination: ctx.accounts.receiver.to_account_info(),
+            authority: escrow_account.to_account_info(),
         };
         let cpi_program = ctx.accounts.token_program.to_account_info();
         let cpi_ctx = CpiContext::new(cpi_program, close_cpi_accounts);
         token::close_account(cpi_ctx)?;
 
+
         escrow_account.is_extract = true;
+        Ok(())
+    }
+
+    pub fn cancel(ctx:Context<Cancel>,_secret_key:String)->Result<()> {
+        let escrow_account = &mut ctx.accounts.escrow_account;
+        
+        let amount = escrow_account.mount;
+        let cpi_accounts = Transfer{
+            from: ctx.accounts.escrow_token_account.to_account_info(),
+            to: ctx.accounts.sender_token_account.to_account_info(),
+            authority: escrow_account.to_account_info(),
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        transfer(CpiContext::new(cpi_program, cpi_accounts),amount)?;
+
+        let close_cpi_accounts = CloseAccount{
+            account: ctx.accounts.escrow_token_account.to_account_info(),
+            destination: ctx.accounts.sender.to_account_info(),
+            authority: escrow_account.to_account_info(),
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new(cpi_program, close_cpi_accounts);
+        token::close_account(cpi_ctx)?;
         Ok(())
     }
 }
@@ -76,6 +108,41 @@ pub struct EscrowAccount {
     pub is_extract:bool,
     pub lock:bool
 }
+
+#[derive(Accounts)]
+#[instruction(secret_key:String)]
+pub struct Cancel<'info>{
+
+    #[account(mut)]
+    pub sender: Signer<'info>,
+
+    #[account(mut)]
+    pub sender_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        seeds=[b"escrow",secret_key.as_bytes(),receiver.key().as_ref()],
+        bump,
+        constraint = escrow_account.from == sender.key(),  // 确保是原始发送者
+        constraint = !escrow_account.is_extract && !escrow_account.lock,           // 确保资金未被提取并且没有被锁定
+        close = sender
+    )]
+    pub escrow_account:Account<'info,EscrowAccount>,
+
+    #[account(
+        mut,
+        seeds=[b"escrow",secret_key.as_bytes(),escrow_account.key().as_ref()],
+        bump,
+        token::mint=usdc_mint,
+        token::authority=escrow_account
+    )]
+    pub escrow_token_account:Account<'info,TokenAccount>,
+
+    pub token_program:Program<'info,Token>,
+
+    pub system_program:Program<'info,System>
+}
+
 
 #[derive(Accounts)]
 #[instruction(mount:u64,unlock_time:u64,secret_key:String)]
@@ -93,7 +160,7 @@ pub struct Deposit<'info>{
         init,
         payer=sender,
         space=8+32+32+8+8+1+1,
-        seeds=[b"escrow",receiver.key().as_ref()],
+        seeds=[b"escrow",secret_key.as_bytes(),receiver.key().as_ref()],
         bump,
         constraint=mount>0
     )]
@@ -126,12 +193,15 @@ pub struct Withdraw<'info>{
     #[account(mut)]
     pub receiver: Signer<'info>,
 
+    #[account(mut)]
+    pub sender: AccountInfo<'info>,
+
     #[account(
         mut,
         seeds = [b"escrow",secret_key.as_bytes(), receiver.key().as_ref()],
         bump,
         constraint=escrow_account.to == receiver.key(),
-        close = receiver
+        close = sender
     )]
     pub escrow_account: Account<'info,EscrowAccount>,
 
@@ -167,5 +237,8 @@ pub enum EscrowError {
 
     #[msg("Invalid owner")]
     InvalidOwner,
+
+    #[msg("Token is locked")]
+    LockToken,
 }
 
